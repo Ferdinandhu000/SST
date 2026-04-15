@@ -1,0 +1,12 @@
+.checkpoints*/
+plots*/
+data/
+tensors/
+.vscode/
+.logs/
+others/
+
+*.pt
+__pycache__/
+*.npy
+*.mat
