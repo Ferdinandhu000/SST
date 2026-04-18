@@ -10,3 +10,4 @@ others/
 __pycache__/
 *.npy
 *.mat
+*.md

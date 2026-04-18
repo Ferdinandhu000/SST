@@ -1,18 +1,18 @@
 dataset:
   init_sensor_timeframes: [0, 5, 10, 15, 20]
-  future_prediction_range: null   # For random future prediction: predicts a frame in [max(sensors) + range[0], max(sensors) + range[1]]
+  future_prediction_range: [0, 10]   # For random future prediction: predicts a frame in [max(sensors) + range[0], max(sensors) + range[1]]
   n_fullstate_timeframes_per_chunk: 1   # not for FNO3D
   n_samplings_per_chunk: 1
   resolution: [180, 360]
   n_sensors: 128
   sensor_generator: 'LHS'  # AroundCylinder | LHS
-  embedding_generator: 'Mask'  # Voronoi | Mask | Vector
+  embedding_generator: 'Voronoi'  # Voronoi | SoftVoronoi | Mask | Vector
   dropout_probabilities: [0.05, 0.04, 0.03, 0.02, 0.01]   # [] for no dropout
-  seed: 1
+  seed: 20
   write_to_disk: true # Set to false if tensors/ are already generated
 
 architecture:
-  momdel_name: 'flronet-transolver'  # flronet-fno | flronet-unet | flronet-mlp | flronet-transolver | fno3d | fno | afno | transolver
+  momdel_name: 'transolver'  # flronet-fno | flronet-afno | flronet-unet | flronet-mlp | flronet-transolver | fno3d | fno | afno | transolver
   # General configs:
   n_channels: 1   # fixed for 1d problems (e.g. 1-channel 48x128)
   embedding_dim: 64
@@ -30,6 +30,10 @@ architecture:
   trans_dropout: 0.0
   # FLRONet-specific configs:
   n_stacked_networks: 2
+  # Input-smoothing Gaussian blur for FLRONet (applied before BranchNet)
+  # Set blur_kernel_size to 0 to disable, or an odd integer >= 3 to enable.
+  blur_kernel_size: 0    # 0=disabled | 5 | 7 | 11 | 15 (larger = smoother)
+  blur_sigma: 0        # std-dev of the Gaussian; ignored when blur_kernel_size=0
 
 training:
   from_checkpoint: null # set to null to train from scratch
@@ -47,12 +51,12 @@ training:
 
 evaluate:
   # from_checkpoint: 'best_fno3d/fno3d9.pt'
-  from_checkpoint: '.checkpoints_CATO_trans_attn_inside_2\flronettransolver1.pt'
+  from_checkpoint: '.checkpoints\flronettransolver4.pt'
   # from_checkpoint: 'best_flronetmlp/flronetmlp12.pt'
   # from_checkpoint: 'best_flronetunet/flronetunet16.pt'
   n_dropout_sensors: 0
   noise_level: 0
-  init_fullstate_timeframes: [10] # FLRONet-specific, set to null to randomly generate the fullstate frames with the same random seed at training 
+  init_fullstate_timeframes: [12] # FLRONet-specific, set to null to randomly generate the fullstate frames with the same random seed at training 
 
 inference:
   # from_checkpoint: '.checkpoints_AFNO/afnonet3.pt'

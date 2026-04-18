@@ -52,6 +52,7 @@ class LHS(SensorGenerator):
         if self.mask is not None:
             # If mask is provided, we sample from valid (ocean) indices
             np.random.seed(self.seed)
+            torch.manual_seed(self.seed)
             valid_indices = torch.nonzero(self.mask == 0) # (N_valid, 2)
             if len(valid_indices) < self.n_sensors:
                 raise ValueError(f"Not enough ocean pixels ({len(valid_indices)}) for {self.n_sensors} sensors.")

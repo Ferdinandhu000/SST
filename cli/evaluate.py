@@ -9,7 +9,7 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from model import FLRONetFNO, FLRONetUNet, FLRONetMLP, FNO3D, FLRONetTransolver, FNO, AFNO, Transolver
+from model import FLRONetFNO, FLRONetUNet, FLRONetMLP, FNO3D, FLRONetTransolver, FLRONetAFNO, FNO, AFNO, Transolver
 from cfd.dataset import CFDDataset
 from common.training import CheckpointLoader
 from worker import Predictor
@@ -32,16 +32,22 @@ def main(config: Dict[str, Any]) -> None:
     n_sensors: int                              = int(config['dataset']['n_sensors'])
     sensor_generator: str                       = str(config['dataset']['sensor_generator'])
     embedding_generator: str                    = str(config['dataset']['embedding_generator'])
-    seed: int                                   = int(config['dataset']['seed'])
+
+    # Evaluate-specific: Force completely random sensor selection every time it's run
+    import random
+    seed: int                                   = random.randint(0, 1000000)
+    print(f"\n[*] evaluate.py: Forcing random seed {seed} to randomly select Test sensors.")
+    # Force regenerating the test tensors on disk so it uses the new random sensors
+    write_to_disk: bool                         = True 
+    
     n_dropout_sensors: int                      = int(config['evaluate']['n_dropout_sensors'])
     noise_level: float                          = float(config['evaluate']['noise_level'])
     init_fullstate_timeframes: List[int] | None  = config['evaluate']['init_fullstate_timeframes']
     from_checkpoint: str                        = str(config['evaluate']['from_checkpoint'])
-    write_to_disk: bool                         = bool(config['dataset'].get('write_to_disk', True))
 
     # Load the model
     checkpoint_loader = CheckpointLoader(checkpoint_path=from_checkpoint)
-    net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FNO3D | FLRONetTransolver | FNO | AFNO | Transolver = checkpoint_loader.load(scope=globals())
+    net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FNO3D | FLRONetTransolver | FLRONetAFNO | FNO | AFNO | Transolver = checkpoint_loader.load(scope=globals())
 
     if isinstance(net, FNO3D):
         init_fullstate_timeframes: List[int] = list(range(min(init_sensor_timeframes), max(init_sensor_timeframes) + 1))

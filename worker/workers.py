@@ -12,8 +12,8 @@ from torch.optim import Adam
 
 from common.training import Accumulator, EarlyStopping, Timer, Logger, CheckpointSaver
 from cfd.dataset import CFDDataset, DatasetMixin
-from cfd.embedding import Voronoi, Mask, Vector
-from model import FLRONetFNO, FLRONetUNet, FLRONetMLP, FNO3D, FLRONetTransolver, FNO, AFNO, Transolver
+from cfd.embedding import Voronoi, SoftVoronoi, Mask, Vector
+from model import FLRONetFNO, FLRONetUNet, FLRONetMLP, FNO3D, FLRONetTransolver, FLRONetAFNO, FNO, AFNO, Transolver
 from common.plotting import plot_frame
 from common.functional import compute_velocity_field
 
@@ -46,11 +46,11 @@ class Worker:
 
         assert fullstate_frames.shape == (batch_size, n_fullstate_frames, n_channels, H, W)
 
-    def _validate_embedding_generator(self, embedding_generator: Voronoi | Mask | Vector) -> None:
+    def _validate_embedding_generator(self, embedding_generator: Voronoi | SoftVoronoi | Mask | Vector) -> None:
         if isinstance(self.net, FLRONetMLP):
             assert isinstance(embedding_generator, Vector)
         if isinstance(self.net, (FLRONetUNet, FLRONetFNO, FNO3D, FLRONetTransolver, FNO, AFNO, Transolver)):
-            assert isinstance(embedding_generator, (Voronoi, Mask))
+            assert isinstance(embedding_generator, (Voronoi, SoftVoronoi, Mask))
 
 
 class Trainer(Worker):
@@ -253,6 +253,8 @@ class Predictor(Worker, DatasetMixin):
             embedding_gen = Mask(resolution=in_resolution, sensor_positions=original_sensor_positions, dropout_probabilities=implied_dropout_probabilities, noise_level=noise_level)
         elif embedding_generator == 'Voronoi':
             embedding_gen = Voronoi(resolution=in_resolution, sensor_positions=original_sensor_positions, dropout_probabilities=implied_dropout_probabilities, noise_level=noise_level)
+        elif embedding_generator == 'SoftVoronoi':
+            embedding_gen = SoftVoronoi(resolution=in_resolution, sensor_positions=original_sensor_positions, dropout_probabilities=implied_dropout_probabilities, noise_level=noise_level)
         else:
             embedding_gen = Vector(resolution=in_resolution, sensor_positions=original_sensor_positions, dropout_probabilities=implied_dropout_probabilities, noise_level=noise_level)
         

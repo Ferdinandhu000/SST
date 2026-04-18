@@ -1,0 +1,23 @@
+name: SSTNet
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch=2.4.1
+  - torchvision
+  - pytorch-cuda=12.4
+  - numpy
+  - matplotlib
+  - pyyaml
+  - tqdm
+  - h5py
+  - pandas
+  - seaborn
+  - pip
+  - pip:
+    - einops
+    - timm
+    - imageio

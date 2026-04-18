@@ -9,7 +9,7 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from model import FLRONetFNO, FLRONetUNet, FLRONetMLP, FNO3D, FLRONetTransolver, FNO, AFNO, Transolver
+from model import FLRONetFNO, FLRONetUNet, FLRONetMLP, FNO3D, FLRONetTransolver, FLRONetAFNO, FNO, AFNO, Transolver
 from cfd.dataset import CFDDataset
 from common.training import CheckpointLoader
 from worker import Trainer
@@ -49,6 +49,9 @@ def main(config: Dict[str, Any]) -> None:
     n_trans_head: int                           = int(config['architecture'].get('n_trans_head', 8))
     slice_num: int                              = int(config['architecture'].get('slice_num', 32))
     trans_dropout: float                        = float(config['architecture'].get('trans_dropout', 0.0))
+    # FLRONet input-smoothing blur (0 = disabled)
+    blur_kernel_size: int                       = int(config['architecture'].get('blur_kernel_size', 0))
+    blur_sigma: float                           = float(config['architecture'].get('blur_sigma', 2.0))
 
     from_checkpoint: Optional[str]              = config['training']['from_checkpoint']
     train_batch_size: int                       = int(config['training']['train_batch_size'])
@@ -110,9 +113,24 @@ def main(config: Dict[str, Any]) -> None:
             assert isinstance(net, FLRONetFNO)
         else:
             net = FLRONetFNO(
-                n_channels=n_channels, n_fno_layers=n_fno_layers, 
+                n_channels=n_channels, n_fno_layers=n_fno_layers,
                 n_hmodes=n_hmodes, n_wmodes=n_wmodes, embedding_dim=embedding_dim,
                 n_stacked_networks=n_stacked_networks,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+            ).cuda()
+
+    elif model_name.lower() == 'flronet-afno':
+        # Model
+        if from_checkpoint is not None:
+            checkpoint_loader = CheckpointLoader(checkpoint_path=from_checkpoint)
+            net: FLRONetAFNO = checkpoint_loader.load(scope=globals()).cuda()
+            assert isinstance(net, FLRONetAFNO)
+        else:
+            net = FLRONetAFNO(
+                n_channels=n_channels, n_fno_layers=n_fno_layers, embedding_dim=embedding_dim,
+                n_stacked_networks=n_stacked_networks,
+                resolution=resolution,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
             ).cuda()
 
     elif model_name.lower() == 'flronet-unet':
@@ -123,7 +141,8 @@ def main(config: Dict[str, Any]) -> None:
             assert isinstance(net, FLRONetUNet)
         else:
             net = FLRONetUNet(
-                n_channels=n_channels, embedding_dim=embedding_dim, n_stacked_networks=n_stacked_networks
+                n_channels=n_channels, embedding_dim=embedding_dim, n_stacked_networks=n_stacked_networks,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
             ).cuda()
     
     elif model_name.lower() == 'flronet-mlp':
@@ -134,8 +153,9 @@ def main(config: Dict[str, Any]) -> None:
             assert isinstance(net, FLRONetMLP)
         else:
             net = FLRONetMLP(
-                n_channels=n_channels, embedding_dim=embedding_dim, n_sensors=n_sensors, 
+                n_channels=n_channels, embedding_dim=embedding_dim, n_sensors=n_sensors,
                 resolution=resolution, n_stacked_networks=n_stacked_networks,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
             ).cuda()
 
     elif model_name.lower() == 'flronet-transolver':
@@ -146,15 +166,16 @@ def main(config: Dict[str, Any]) -> None:
             assert isinstance(net, FLRONetTransolver)
         else:
             net = FLRONetTransolver(
-                n_channels=n_channels, 
-                n_layers=n_trans_layers, 
-                n_hidden=n_trans_hidden, 
+                n_channels=n_channels,
+                n_layers=n_trans_layers,
+                n_hidden=n_trans_hidden,
                 n_head=n_trans_head,
-                embedding_dim=embedding_dim, 
+                embedding_dim=embedding_dim,
                 n_stacked_networks=n_stacked_networks,
                 resolution=resolution,
                 slice_num=slice_num,
-                dropout=trans_dropout
+                dropout=trans_dropout,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
             ).cuda()
 
     elif model_name.lower() == 'afno':

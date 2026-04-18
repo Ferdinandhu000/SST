@@ -12,7 +12,8 @@ import torch.nn.functional as F
 import h5py
 
 from cfd.sensors import LHS, AroundCylinder
-from cfd.embedding import Voronoi, Mask, Vector
+from cfd.embedding import Voronoi, SoftVoronoi, Mask, Vector
+from common.plotting import plot_frame
 
 # ──────────────────────────────────────────────
 # Dataset configuration for sst_weekly.mat
@@ -120,7 +121,7 @@ class CFDDataset(Dataset, DatasetMixin):
         dropout_probabilities: List[float],
         noise_level: float,
         sensor_generator: Literal['LHS', 'AroundCylinder'], 
-        embedding_generator: Literal['Voronoi', 'Mask', 'Vector'],
+        embedding_generator: Literal['Voronoi', 'SoftVoronoi', 'Mask', 'Vector'],
         init_fullstate_timeframes: List[int] | None,
         seed: int,
         write_to_disk: bool = True,
@@ -188,6 +189,8 @@ class CFDDataset(Dataset, DatasetMixin):
             self.embedding_generator = Mask(resolution=resolution, sensor_positions=self.sensor_positions, dropout_probabilities=dropout_probabilities, noise_level=noise_level)
         elif embedding_generator == 'Voronoi':
             self.embedding_generator = Voronoi(resolution=resolution, sensor_positions=self.sensor_positions, dropout_probabilities=dropout_probabilities, noise_level=noise_level)
+        elif embedding_generator == 'SoftVoronoi':
+            self.embedding_generator = SoftVoronoi(resolution=resolution, sensor_positions=self.sensor_positions, dropout_probabilities=dropout_probabilities, noise_level=noise_level)
         else:
             self.embedding_generator = Vector(resolution=resolution, sensor_positions=self.sensor_positions, dropout_probabilities=dropout_probabilities, noise_level=noise_level)
 
@@ -252,6 +255,19 @@ class CFDDataset(Dataset, DatasetMixin):
                 embedding_input = data[current_timeframes].unsqueeze(0)
                 sensor_embedding = self.embedding_generator(data=embedding_input, seed=self.seed + idx).squeeze(0)
                 torch.save(sensor_embedding.clone(), os.path.join(self.sensor_values_dest, f'sv{prefix}{suffix}.pt'))
+                
+                # PLOT the first generated frame for visual inspection of the sensors
+                if running_index == 0:
+                    split_name = 'train' if 'train' in self.root else 'test'
+                    embedding_name = self.embedding_generator.__class__.__name__
+                    plot_frame(
+                        sensor_positions=self.sensor_positions,
+                        sensor_frame=sensor_embedding[0, 0] if sensor_embedding.ndim == 4 else None,
+                        fullstate_frame=data[current_timeframes[0]][0],
+                        mask=self.mask,
+                        title=f"{split_name.upper()} First Frame Embedding ({embedding_name})",
+                        filename=f"generated_tensor_{split_name}_frame0"
+                    )
                 
                 fullstate_timeframes_list.append(fullstate_timeframes[idx].tolist())
                 torch.save(fullstate_timeframes[idx].clone(), os.path.join(self.fullstate_timeframes_dest, f'ft{prefix}{suffix}.pt'))

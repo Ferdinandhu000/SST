@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -7,8 +7,6 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from .transolver2D import Model as TransolverModel
-
-is_afno = False
 
 class SpectralConv2d(nn.Module):
 
@@ -182,7 +180,7 @@ class DePatchEmbed(nn.Module):
 class FNOBranchNet(nn.Module):
 
     def __init__(self, n_channels: int, n_fno_layers: int, n_hmodes: int, n_wmodes: int, embedding_dim: int, 
-                 resolution: Tuple[int, int] = (180, 360), n_timeframes: int = 5):
+                 resolution: Tuple[int, int] = (180, 360), n_timeframes: int = 5, is_afno: bool = False):
         super().__init__()
         self.n_channels: int = n_channels
         self.n_timeframes: int = n_timeframes
@@ -191,6 +189,7 @@ class FNOBranchNet(nn.Module):
         self.n_wmodes: int = n_wmodes
         self.embedding_dim: int = embedding_dim
         self.resolution = resolution
+        self.is_afno = is_afno
         
         # in_chans_total = n_channels  ## BT合并
         in_chans_total = n_timeframes * n_channels  ## TC合并
@@ -213,7 +212,7 @@ class FNOBranchNet(nn.Module):
             nn.Linear(in_features=128, out_features=in_chans_total),
         ) 
 
-        if is_afno:
+        if self.is_afno:
             self.patch_embed = PatchEmbed(img_size=resolution, patch_size=patch_size, in_chans=in_chans_total, embed_dim=768)
             self.num_patches = self.patch_embed.num_patches
             self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, 768))
@@ -246,7 +245,7 @@ class FNOBranchNet(nn.Module):
         flattened_sensor_value: torch.Tensor = sensor_values.flatten(start_dim=1, end_dim=2)  # (B, T*C, H, W)
         
         # embedding
-        if is_afno:
+        if self.is_afno:
             output = flattened_sensor_value
         else:
             output = self.embedding_layer(flattened_sensor_value.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
@@ -257,7 +256,7 @@ class FNOBranchNet(nn.Module):
 
 
         # afno
-        if is_afno:
+        if self.is_afno:
             output = self.patch_embed(output)  # patch embedding
             output = output + self.pos_embed  # position embedding
             for i in range(self.n_fno_layers):
@@ -545,7 +544,25 @@ class TrunkNet(nn.Module):
 
 class _BaseFLRONet(nn.Module):
 
-    def __init__(self, n_channels: int, embedding_dim: int, n_stacked_networks: int):
+    def __init__(
+        self,
+        n_channels: int,
+        embedding_dim: int,
+        n_stacked_networks: int,
+        blur_kernel_size: int = 0,
+        blur_sigma: float = 2.0,
+    ):
+        """
+        Parameters
+        ----------
+        blur_kernel_size : int
+            Size of the Gaussian blur kernel applied to sensor_values before
+            the BranchNets.  Must be an odd integer >= 3, or 0 to disable.
+            Controlled via ``architecture.blur_kernel_size`` in config.yaml.
+        blur_sigma : float
+            Standard deviation of the Gaussian blur kernel.  Ignored when
+            ``blur_kernel_size == 0``.
+        """
         super().__init__()
         self.n_channels: int = n_channels
         self.embedding_dim: int = embedding_dim
@@ -554,6 +571,19 @@ class _BaseFLRONet(nn.Module):
         self.sinusoid_embedding = SinusoidEmbedding(embedding_dim=embedding_dim)
         self.trunk_net = TrunkNet(embedding_dim=embedding_dim, n_outputs=n_stacked_networks)
         self.bias = nn.Parameter(data=torch.randn(n_channels, 1, 1))
+        # Optional input-smoothing blur (configurable via YAML)
+        self.blur_kernel_size: int = blur_kernel_size
+        self.blur_sigma: float = blur_sigma
+        if blur_kernel_size > 0:
+            assert blur_kernel_size % 2 == 1 and blur_kernel_size >= 3, \
+                'blur_kernel_size must be an odd integer >= 3'
+            import torchvision.transforms as T
+            self.blur_op: Optional[nn.Module] = T.GaussianBlur(
+                kernel_size=(blur_kernel_size, blur_kernel_size),
+                sigma=(blur_sigma, blur_sigma),
+            )
+        else:
+            self.blur_op = None
 
     def forward(
         self,
@@ -583,6 +613,12 @@ class _BaseFLRONet(nn.Module):
             out_H, out_W = in_H, in_W
         else:
             out_H, out_W = out_resolution
+
+        # Apply Gaussian blur to spatial sensor maps (only for non-MLP variants)
+        if sensor_values.ndim == 5 and self.blur_op is not None:
+            sensor_values = self.blur_op(
+                sensor_values.reshape(-1, self.n_channels, in_H, in_W)
+            ).reshape(batch_size, n_sensor_timeframes, self.n_channels, in_H, in_W)
 
         # TrunkNet
         fullstate_time_embeddings: torch.Tensor = self.sinusoid_embedding(timeframes=fullstate_timeframes)
@@ -631,10 +667,15 @@ class FLRONetFNO(_BaseFLRONet):
 
     def __init__(
         self,
-        n_channels: int, n_fno_layers: int, n_hmodes: int, n_wmodes: int, 
+        n_channels: int, n_fno_layers: int, n_hmodes: int, n_wmodes: int,
         embedding_dim: int, n_stacked_networks: int, resolution: Tuple[int, int] = (180, 360),
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
     ):
-        super().__init__(n_channels=n_channels, embedding_dim=embedding_dim, n_stacked_networks=n_stacked_networks)
+        super().__init__(
+            n_channels=n_channels, embedding_dim=embedding_dim,
+            n_stacked_networks=n_stacked_networks,
+            blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+        )
         self.n_fno_layers: int = n_fno_layers
         self.n_hmodes: int = n_hmodes
         self.n_wmodes: int = n_wmodes
@@ -643,8 +684,35 @@ class FLRONetFNO(_BaseFLRONet):
         self.branch_nets = nn.ModuleList(
             modules=[
                 FNOBranchNet(
-                    n_channels=n_channels, n_fno_layers=n_fno_layers, n_hmodes=n_hmodes, n_wmodes=n_wmodes, 
-                    embedding_dim=embedding_dim, resolution=resolution,
+                    n_channels=n_channels, n_fno_layers=n_fno_layers, n_hmodes=n_hmodes, n_wmodes=n_wmodes,
+                    embedding_dim=embedding_dim, resolution=resolution, is_afno=False
+                )
+                for _ in range(n_stacked_networks)
+            ]
+        )
+
+
+class FLRONetAFNO(_BaseFLRONet):
+
+    def __init__(
+        self,
+        n_channels: int, n_fno_layers: int, embedding_dim: int, n_stacked_networks: int, 
+        resolution: Tuple[int, int] = (180, 360),
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
+    ):
+        super().__init__(
+            n_channels=n_channels, embedding_dim=embedding_dim,
+            n_stacked_networks=n_stacked_networks,
+            blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+        )
+        self.n_fno_layers: int = n_fno_layers
+        self.resolution = resolution
+
+        self.branch_nets = nn.ModuleList(
+            modules=[
+                FNOBranchNet(
+                    n_channels=n_channels, n_fno_layers=n_fno_layers, n_hmodes=1, n_wmodes=1,
+                    embedding_dim=embedding_dim, resolution=resolution, is_afno=True
                 )
                 for _ in range(n_stacked_networks)
             ]
@@ -653,8 +721,16 @@ class FLRONetFNO(_BaseFLRONet):
 
 class FLRONetMLP(_BaseFLRONet):
 
-    def __init__(self, n_channels: int, embedding_dim: int, n_sensors: int, resolution: int, n_stacked_networks: int):
-        super().__init__(n_channels=n_channels, embedding_dim=embedding_dim, n_stacked_networks=n_stacked_networks)
+    def __init__(
+        self,
+        n_channels: int, embedding_dim: int, n_sensors: int, resolution: int, n_stacked_networks: int,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
+    ):
+        super().__init__(
+            n_channels=n_channels, embedding_dim=embedding_dim,
+            n_stacked_networks=n_stacked_networks,
+            blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+        )
         self.n_sensors: int = n_sensors
         self.resolution: int = resolution
 
@@ -668,8 +744,16 @@ class FLRONetMLP(_BaseFLRONet):
 
 class FLRONetUNet(_BaseFLRONet):
 
-    def __init__(self, n_channels: int, embedding_dim: int, n_stacked_networks: int):
-        super().__init__(n_channels=n_channels, embedding_dim=embedding_dim, n_stacked_networks=n_stacked_networks)
+    def __init__(
+        self,
+        n_channels: int, embedding_dim: int, n_stacked_networks: int,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
+    ):
+        super().__init__(
+            n_channels=n_channels, embedding_dim=embedding_dim,
+            n_stacked_networks=n_stacked_networks,
+            blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+        )
 
         self.branch_nets = nn.ModuleList(
             modules=[
@@ -686,8 +770,13 @@ class FLRONetTransolver(_BaseFLRONet):
         n_channels: int, n_layers: int, n_hidden: int, n_head: int,
         embedding_dim: int, n_stacked_networks: int, resolution: Tuple[int, int] = (180, 360), n_timeframes: int = 5,
         slice_num: int = 32, dropout: float = 0.0,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
     ):
-        super().__init__(n_channels=n_channels, embedding_dim=embedding_dim, n_stacked_networks=n_stacked_networks)
+        super().__init__(
+            n_channels=n_channels, embedding_dim=embedding_dim,
+            n_stacked_networks=n_stacked_networks,
+            blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+        )
         self.n_layers = n_layers
         self.n_hidden = n_hidden
         self.n_head = n_head
