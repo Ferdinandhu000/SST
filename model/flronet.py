@@ -180,7 +180,7 @@ class DePatchEmbed(nn.Module):
 class FNOBranchNet(nn.Module):
 
     def __init__(self, n_channels: int, n_fno_layers: int, n_hmodes: int, n_wmodes: int, embedding_dim: int, 
-                 resolution: Tuple[int, int] = (180, 360), n_timeframes: int = 5, is_afno: bool = False):
+                 resolution: Tuple[int, int] = (180, 360), n_timeframes: int = 5, is_afno: bool = False, is_TC: bool = True):
         super().__init__()
         self.n_channels: int = n_channels
         self.n_timeframes: int = n_timeframes
@@ -190,9 +190,9 @@ class FNOBranchNet(nn.Module):
         self.embedding_dim: int = embedding_dim
         self.resolution = resolution
         self.is_afno = is_afno
+        self.is_TC = is_TC
         
-        # in_chans_total = n_channels  ## BT合并
-        in_chans_total = n_timeframes * n_channels  ## TC合并
+        in_chans_total = n_timeframes * n_channels if is_TC else n_channels
         
         # Determine patch size: should be divisor of H and W
         patch_size = (20, 20) if resolution[0] % 20 == 0 and resolution[1] % 20 == 0 else (resolution[0], resolution[1])
@@ -239,10 +239,11 @@ class FNOBranchNet(nn.Module):
         assert n_channels == self.n_channels
         assert in_timeframes == self.n_timeframes
         
-        # Merge B and T
-        # flattened_sensor_value: torch.Tensor = sensor_values.flatten(start_dim=0, end_dim=1)  # (B*T, C, H, W)
-        # # Merge T and C
-        flattened_sensor_value: torch.Tensor = sensor_values.flatten(start_dim=1, end_dim=2)  # (B, T*C, H, W)
+        # Merge Dimensions
+        if self.is_TC:
+            flattened_sensor_value: torch.Tensor = sensor_values.flatten(start_dim=1, end_dim=2)  # Merge T and C: (B, T*C, H, W)
+        else:
+            flattened_sensor_value: torch.Tensor = sensor_values.flatten(start_dim=0, end_dim=1)  # Merge B and T: (B*T, C, H, W)
         
         # embedding
         if self.is_afno:
@@ -278,19 +279,25 @@ class FNOBranchNet(nn.Module):
             
         # Reshape back to (B, T, C, H, W)
         out_H, out_W = out_resolution
-        output = output.reshape(batch_size, self.n_timeframes, self.n_channels, out_H, out_W)
-
+        if self.is_TC:
+            output = output.reshape(batch_size, self.n_timeframes, self.n_channels, out_H, out_W)
+        else:
+            output = output.reshape(batch_size, self.n_timeframes, self.n_channels, out_H, out_W)  # B*T -> B, T handles natively by reshape
         return output
 
 
 class UNetBranchNet(nn.Module):
 
-    def __init__(self, n_channels: int, embedding_dim: int):
+    def __init__(self, n_channels: int, embedding_dim: int, is_TC: bool = True, n_timeframes: int = 5):
         super().__init__()
         self.n_channels: int = n_channels
         self.embedding_dim: int = embedding_dim
+        self.is_TC = is_TC
+        self.n_timeframes = n_timeframes
+        
+        in_chans = n_channels * n_timeframes if is_TC else n_channels
         # Encoder
-        self.enc_conv1 = self.conv_block(in_channels=n_channels, out_channels=embedding_dim)
+        self.enc_conv1 = self.conv_block(in_channels=in_chans, out_channels=embedding_dim)
         self.enc_conv2 = self.conv_block(in_channels=embedding_dim, out_channels=embedding_dim * 2)
         self.enc_conv3 = self.conv_block(in_channels=embedding_dim * 2, out_channels=embedding_dim * 4)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
@@ -304,14 +311,18 @@ class UNetBranchNet(nn.Module):
         self.upconv1 = self.upconv(in_channels=embedding_dim * 2, out_channels=embedding_dim)
         self.dec_conv1 = self.conv_block(in_channels=embedding_dim * 2, out_channels=embedding_dim)
         # Final convolution
-        self.final_conv = nn.Conv2d(in_channels=embedding_dim, out_channels=n_channels, kernel_size=1)
+        out_chans = n_channels * n_timeframes if is_TC else n_channels
+        self.final_conv = nn.Conv2d(in_channels=embedding_dim, out_channels=out_chans, kernel_size=1)
 
     def forward(self, sensor_values: torch.Tensor) -> torch.Tensor:
         assert sensor_values.ndim == 5
         batch_size, in_timesteps, n_channels, H, W = sensor_values.shape
         assert n_channels == self.n_channels
-        # Layer Norm
-        reshaped_input: torch.Tensor = sensor_values.flatten(start_dim=0, end_dim=1)
+        # Flattening logic
+        if self.is_TC:
+            reshaped_input: torch.Tensor = sensor_values.flatten(start_dim=1, end_dim=2)  # Merge TC
+        else:
+            reshaped_input: torch.Tensor = sensor_values.flatten(start_dim=0, end_dim=1)  # Merge BT
         # Encoder
         enc1: torch.Tensor = self.enc_conv1(reshaped_input)
         enc2: torch.Tensor = self.enc_conv2(self.pool(enc1))
@@ -361,11 +372,13 @@ class TransolverBranchNet(nn.Module):
         slice_num: int = 32,
         out_dim: int = 1,
         dropout: float = 0.0,
+        is_TC: bool = True,
     ):
         super().__init__()
         self.n_channels = n_channels
         self.resolution = resolution
         self.H, self.W = resolution
+        self.is_TC = is_TC
         
         # Grid coordinates (normalized to [0, 1])
         # We use unified_pos=False in TransolverModel, so we provide coordinates
@@ -375,8 +388,8 @@ class TransolverBranchNet(nn.Module):
         # (1, N, 2) 
         self.register_buffer('grid', torch.stack([grid_x, grid_y], dim=-1).reshape(1, self.H * self.W, 2))
 
-        in_chans_total = n_timeframes * n_channels
-        out_chans_total = n_timeframes * out_dim
+        in_chans_total = n_timeframes * n_channels if is_TC else n_channels
+        out_chans_total = n_timeframes * out_dim if is_TC else out_dim
 
         self.model = TransolverModel(
             space_dim=2,
@@ -397,10 +410,10 @@ class TransolverBranchNet(nn.Module):
         batch_size, in_timeframes, n_channels, in_H, in_W = sensor_values.shape
         assert n_channels == self.n_channels
         
-        # Flatten B and T
-        # v: torch.Tensor = sensor_values.flatten(start_dim=0, end_dim=1) # (B*T, C, in_H, in_W)
-        # Flatten T and C
-        v: torch.Tensor = sensor_values.flatten(start_dim=1, end_dim=2) # (B, T*C, in_H, in_W)
+        if self.is_TC:
+            v: torch.Tensor = sensor_values.flatten(start_dim=1, end_dim=2) # (B, T*C, in_H, in_W)
+        else:
+            v: torch.Tensor = sensor_values.flatten(start_dim=0, end_dim=1) # (B*T, C, in_H, in_W)
         
         # Interpolate if input resolution is different from model resolution
         if (in_H, in_W) != self.resolution:
@@ -409,21 +422,17 @@ class TransolverBranchNet(nn.Module):
         else:
             curr_H, curr_W = in_H, in_W
             
-        # Reshape to (B*T, N, C) for Transolver
-        # fx = v.permute(0, 2, 3, 1).reshape(batch_size * in_timeframes, curr_H * curr_W, n_channels)
-        fx = v.permute(0, 2, 3, 1).reshape(batch_size, curr_H * curr_W, in_timeframes * n_channels)
-        
-        # Provide coordinates grid
-        x = self.grid.repeat(batch_size * in_timeframes, 1, 1) # (B*T, N, 2)
-        x = self.grid.repeat(batch_size, 1, 1) # (B*T, N, 2)
-        
-        # Transolver forward
-        output = self.model(x, fx) # (B*T, N, out_dim)
-        
-        # Reshape back to (B*T, C, H, W)
-        # output = output.reshape(batch_size * in_timeframes, curr_H, curr_W, -1).permute(0, 3, 1, 2)
-        output = output.reshape(batch_size, curr_H, curr_W, -1).permute(0, 3, 1, 2)
-        
+        if self.is_TC:
+            fx = v.permute(0, 2, 3, 1).reshape(batch_size, curr_H * curr_W, in_timeframes * n_channels)
+            x = self.grid.repeat(batch_size, 1, 1) # (B, N, 2)
+            output = self.model(x, fx) # (B, N, out_chans_total)
+            output = output.reshape(batch_size, curr_H, curr_W, -1).permute(0, 3, 1, 2)
+        else:
+            fx = v.permute(0, 2, 3, 1).reshape(batch_size * in_timeframes, curr_H * curr_W, n_channels)
+            x = self.grid.repeat(batch_size * in_timeframes, 1, 1) # (B*T, N, 2)
+            output = self.model(x, fx) # (B*T, N, out_dim)
+            output = output.reshape(batch_size * in_timeframes, curr_H, curr_W, -1).permute(0, 3, 1, 2)
+            
         # Interpolate to out_resolution if requested
         if out_resolution is not None and out_resolution != (curr_H, curr_W):
             output = F.interpolate(input=output, size=out_resolution, mode='bilinear', align_corners=False)
@@ -438,17 +447,22 @@ class TransolverBranchNet(nn.Module):
 
 class MLPBranchNet(nn.Module):
 
-    def __init__(self, n_channels: int, embedding_dim: int, n_sensors: int, resolution: Tuple[int, int]):
+    def __init__(self, n_channels: int, embedding_dim: int, n_sensors: int, resolution: Tuple[int, int], is_TC: bool = True, n_timeframes: int = 5):
         super().__init__()
         self.n_channels: int = n_channels
         self.embedding_dim: int = embedding_dim
         self.n_sensors: int = n_sensors
         self.resolution: Tuple[int, int] = resolution
         self.H, self.W = resolution
+        self.is_TC = is_TC
+        self.n_timeframes = n_timeframes
         
+        in_chans = n_channels * n_sensors * n_timeframes if is_TC else n_channels * n_sensors
+        out_chans = self.H * self.W * n_channels * n_timeframes if is_TC else self.H * self.W * n_channels
         hidden_dim: int = embedding_dim * n_sensors
+
         block0 = nn.Sequential(
-            nn.Linear(in_features=n_channels * n_sensors, out_features=hidden_dim),
+            nn.Linear(in_features=in_chans, out_features=hidden_dim),
             nn.ReLU(),
             nn.Dropout(p=0.2),
         )
@@ -467,7 +481,7 @@ class MLPBranchNet(nn.Module):
             nn.ReLU(),
             nn.Dropout(p=0.2),
         )
-        block4 = nn.Linear(in_features=hidden_dim, out_features=n_channels * self.H * self.W)
+        block4 = nn.Linear(in_features=hidden_dim, out_features=out_chans)
         self.blocks = nn.Sequential(block0, block1, block2, block3, block4)
 
     def forward(self, sensor_values: torch.Tensor):
@@ -669,7 +683,7 @@ class FLRONetFNO(_BaseFLRONet):
         self,
         n_channels: int, n_fno_layers: int, n_hmodes: int, n_wmodes: int,
         embedding_dim: int, n_stacked_networks: int, resolution: Tuple[int, int] = (180, 360),
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
@@ -680,12 +694,13 @@ class FLRONetFNO(_BaseFLRONet):
         self.n_hmodes: int = n_hmodes
         self.n_wmodes: int = n_wmodes
         self.resolution = resolution
+        self.is_TC = is_TC
 
         self.branch_nets = nn.ModuleList(
             modules=[
                 FNOBranchNet(
                     n_channels=n_channels, n_fno_layers=n_fno_layers, n_hmodes=n_hmodes, n_wmodes=n_wmodes,
-                    embedding_dim=embedding_dim, resolution=resolution, is_afno=False
+                    embedding_dim=embedding_dim, resolution=resolution, is_afno=False, is_TC=is_TC
                 )
                 for _ in range(n_stacked_networks)
             ]
@@ -698,7 +713,7 @@ class FLRONetAFNO(_BaseFLRONet):
         self,
         n_channels: int, n_fno_layers: int, embedding_dim: int, n_stacked_networks: int, 
         resolution: Tuple[int, int] = (180, 360),
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
@@ -707,12 +722,13 @@ class FLRONetAFNO(_BaseFLRONet):
         )
         self.n_fno_layers: int = n_fno_layers
         self.resolution = resolution
+        self.is_TC = is_TC
 
         self.branch_nets = nn.ModuleList(
             modules=[
                 FNOBranchNet(
                     n_channels=n_channels, n_fno_layers=n_fno_layers, n_hmodes=1, n_wmodes=1,
-                    embedding_dim=embedding_dim, resolution=resolution, is_afno=True
+                    embedding_dim=embedding_dim, resolution=resolution, is_afno=True, is_TC=is_TC
                 )
                 for _ in range(n_stacked_networks)
             ]
@@ -724,7 +740,7 @@ class FLRONetMLP(_BaseFLRONet):
     def __init__(
         self,
         n_channels: int, embedding_dim: int, n_sensors: int, resolution: int, n_stacked_networks: int,
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
@@ -733,10 +749,11 @@ class FLRONetMLP(_BaseFLRONet):
         )
         self.n_sensors: int = n_sensors
         self.resolution: int = resolution
+        self.is_TC = is_TC
 
         self.branch_nets = nn.ModuleList(
             modules=[
-                MLPBranchNet(n_channels=n_channels, embedding_dim=embedding_dim, n_sensors=n_sensors, resolution=resolution)
+                MLPBranchNet(n_channels=n_channels, embedding_dim=embedding_dim, n_sensors=n_sensors, resolution=resolution, is_TC=is_TC)
                 for _ in range(n_stacked_networks)
             ]
         )
@@ -747,17 +764,18 @@ class FLRONetUNet(_BaseFLRONet):
     def __init__(
         self,
         n_channels: int, embedding_dim: int, n_stacked_networks: int,
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
             n_stacked_networks=n_stacked_networks,
             blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
         )
+        self.is_TC = is_TC
 
         self.branch_nets = nn.ModuleList(
             modules=[
-                UNetBranchNet(n_channels=n_channels, embedding_dim=embedding_dim)
+                UNetBranchNet(n_channels=n_channels, embedding_dim=embedding_dim, is_TC=is_TC)
                 for _ in range(n_stacked_networks)
             ]
         )
@@ -770,7 +788,7 @@ class FLRONetTransolver(_BaseFLRONet):
         n_channels: int, n_layers: int, n_hidden: int, n_head: int,
         embedding_dim: int, n_stacked_networks: int, resolution: Tuple[int, int] = (180, 360), n_timeframes: int = 5,
         slice_num: int = 32, dropout: float = 0.0,
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
@@ -784,12 +802,13 @@ class FLRONetTransolver(_BaseFLRONet):
         self.n_timeframes = n_timeframes
         self.slice_num = slice_num
         self.dropout = dropout
+        self.is_TC = is_TC
 
         self.branch_nets = nn.ModuleList(
             modules=[
                 TransolverBranchNet(
                     n_channels=n_channels, n_layers=n_layers, n_hidden=n_hidden, n_head=n_head,
-                    resolution=resolution, n_timeframes=n_timeframes, slice_num=slice_num, out_dim=n_channels, dropout=dropout
+                    resolution=resolution, n_timeframes=n_timeframes, slice_num=slice_num, out_dim=n_channels, dropout=dropout, is_TC=is_TC
                 )
                 for _ in range(n_stacked_networks)
             ]

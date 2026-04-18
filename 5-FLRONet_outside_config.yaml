@@ -1,6 +1,6 @@
 dataset:
   init_sensor_timeframes: [0, 5, 10, 15, 20]
-  future_prediction_range: null   # For random future prediction: predicts a frame in [max(sensors) + range[0], max(sensors) + range[1]]
+  future_prediction_range: [0, 10]   # For random future prediction: predicts a frame in [max(sensors) + range[0], max(sensors) + range[1]]
   n_fullstate_timeframes_per_chunk: 1   # not for FNO3D
   n_samplings_per_chunk: 1
   resolution: [180, 360]
@@ -12,7 +12,8 @@ dataset:
   write_to_disk: true # Set to false if tensors/ are already generated
 
 architecture:
-  momdel_name: 'afno'  # flronet-fno | flronet-afno | flronet-unet | flronet-mlp | flronet-transolver | fno3d | fno | afno | transolver
+  momdel_name: 'flronet-fno'  # flronet-fno | flronet-afno | flronet-unet | flronet-mlp | flronet-transolver | fno3d | fno | afno | transolver
+  is_TC: false 
   # General configs:
   n_channels: 1   # fixed for 1d problems (e.g. 1-channel 48x128)
   embedding_dim: 64
@@ -39,7 +40,7 @@ training:
   from_checkpoint: null # set to null to train from scratch
   train_batch_size: 2
   val_batch_size: 2
-  learning_rate: 1e-5
+  learning_rate: 1e-4
   n_epochs: 100
   patience: 10
   tolerance: 0.

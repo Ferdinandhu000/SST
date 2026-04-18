@@ -52,6 +52,7 @@ def main(config: Dict[str, Any]) -> None:
     # FLRONet input-smoothing blur (0 = disabled)
     blur_kernel_size: int                       = int(config['architecture'].get('blur_kernel_size', 0))
     blur_sigma: float                           = float(config['architecture'].get('blur_sigma', 2.0))
+    is_TC: bool                                 = bool(config['architecture'].get('is_TC', True))
 
     from_checkpoint: Optional[str]              = config['training']['from_checkpoint']
     train_batch_size: int                       = int(config['training']['train_batch_size'])
@@ -116,7 +117,7 @@ def main(config: Dict[str, Any]) -> None:
                 n_channels=n_channels, n_fno_layers=n_fno_layers,
                 n_hmodes=n_hmodes, n_wmodes=n_wmodes, embedding_dim=embedding_dim,
                 n_stacked_networks=n_stacked_networks,
-                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
             ).cuda()
 
     elif model_name.lower() == 'flronet-afno':
@@ -130,7 +131,7 @@ def main(config: Dict[str, Any]) -> None:
                 n_channels=n_channels, n_fno_layers=n_fno_layers, embedding_dim=embedding_dim,
                 n_stacked_networks=n_stacked_networks,
                 resolution=resolution,
-                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
             ).cuda()
 
     elif model_name.lower() == 'flronet-unet':
@@ -142,7 +143,7 @@ def main(config: Dict[str, Any]) -> None:
         else:
             net = FLRONetUNet(
                 n_channels=n_channels, embedding_dim=embedding_dim, n_stacked_networks=n_stacked_networks,
-                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
             ).cuda()
     
     elif model_name.lower() == 'flronet-mlp':
@@ -155,7 +156,7 @@ def main(config: Dict[str, Any]) -> None:
             net = FLRONetMLP(
                 n_channels=n_channels, embedding_dim=embedding_dim, n_sensors=n_sensors,
                 resolution=resolution, n_stacked_networks=n_stacked_networks,
-                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
             ).cuda()
 
     elif model_name.lower() == 'flronet-transolver':
@@ -175,7 +176,7 @@ def main(config: Dict[str, Any]) -> None:
                 resolution=resolution,
                 slice_num=slice_num,
                 dropout=trans_dropout,
-                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+                blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
             ).cuda()
 
     elif model_name.lower() == 'afno':
