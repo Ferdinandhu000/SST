@@ -3,6 +3,10 @@ from typing import List, Dict, Any, Optional
 import yaml
 import sys
 import os
+import shutil
+from pathlib import Path
+
+import torch
 
 # Ensure the project root is on PYTHONPATH when running as a script
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -15,7 +19,7 @@ from common.training import CheckpointLoader
 from worker import Trainer
 
 
-def main(config: Dict[str, Any]) -> None:
+def main(config: Dict[str, Any], checkpoint_path: str = '.checkpoints') -> None:
     """
     Main function to train FLRONet.
 
@@ -53,6 +57,7 @@ def main(config: Dict[str, Any]) -> None:
     blur_kernel_size: int                       = int(config['architecture'].get('blur_kernel_size', 0))
     blur_sigma: float                           = float(config['architecture'].get('blur_sigma', 2.0))
     is_TC: bool                                 = bool(config['architecture'].get('is_TC', True))
+    is_cross_attn: bool                         = bool(config['architecture'].get('is_cross_attn', False))
 
     from_checkpoint: Optional[str]              = config['training']['from_checkpoint']
     train_batch_size: int                       = int(config['training']['train_batch_size'])
@@ -118,6 +123,7 @@ def main(config: Dict[str, Any]) -> None:
                 n_hmodes=n_hmodes, n_wmodes=n_wmodes, embedding_dim=embedding_dim,
                 n_stacked_networks=n_stacked_networks,
                 blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
+                is_cross_attn=is_cross_attn,
             ).cuda()
 
     elif model_name.lower() == 'flronet-afno':
@@ -132,6 +138,7 @@ def main(config: Dict[str, Any]) -> None:
                 n_stacked_networks=n_stacked_networks,
                 resolution=resolution,
                 blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
+                is_cross_attn=is_cross_attn,
             ).cuda()
 
     elif model_name.lower() == 'flronet-unet':
@@ -144,6 +151,7 @@ def main(config: Dict[str, Any]) -> None:
             net = FLRONetUNet(
                 n_channels=n_channels, embedding_dim=embedding_dim, n_stacked_networks=n_stacked_networks,
                 blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
+                is_cross_attn=is_cross_attn,
             ).cuda()
     
     elif model_name.lower() == 'flronet-mlp':
@@ -157,6 +165,7 @@ def main(config: Dict[str, Any]) -> None:
                 n_channels=n_channels, embedding_dim=embedding_dim, n_sensors=n_sensors,
                 resolution=resolution, n_stacked_networks=n_stacked_networks,
                 blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
+                is_cross_attn=is_cross_attn,
             ).cuda()
 
     elif model_name.lower() == 'flronet-transolver':
@@ -177,6 +186,7 @@ def main(config: Dict[str, Any]) -> None:
                 slice_num=slice_num,
                 dropout=trans_dropout,
                 blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma, is_TC=is_TC,
+                is_cross_attn=is_cross_attn,
             ).cuda()
 
     elif model_name.lower() == 'afno':
@@ -261,19 +271,62 @@ def main(config: Dict[str, Any]) -> None:
         n_epochs=n_epochs, 
         patience=patience,
         tolerance=tolerance, 
-        checkpoint_path=f'.checkpoints',
+        checkpoint_path=checkpoint_path,
         save_frequency=save_frequency,
     )
+
+
+def _resolve_config_path(path_str: str) -> Path:
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+    if path.exists():
+        return path.resolve()
+    return (Path(ROOT_DIR) / path).resolve()
+
+
+def _load_config(config_path: Path) -> Dict[str, Any]:
+    with open(file=str(config_path), mode='r') as f:
+        return yaml.safe_load(f)
+
+
+def _cleanup_tensors() -> None:
+    tensors_dir = Path(ROOT_DIR) / 'tensors'
+    if tensors_dir.is_dir():
+        shutil.rmtree(tensors_dir)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _iter_yaml_files(config_dir: Path) -> List[Path]:
+    yaml_files = list(config_dir.glob('*.yaml')) + list(config_dir.glob('*.yml'))
+    return sorted(yaml_files, key=lambda p: p.name)
 
 
 if __name__ == "__main__":
     # Initialize the argument parser
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, required=True, help='Configuration file name.')
+    parser.add_argument('--config', type=str, required=False, default=None, help='Configuration file name.')
+    parser.add_argument('--config-dir', type=str, default='yaml', help='Directory that contains YAML configs for batch training.')
     args: argparse.Namespace = parser.parse_args()
-    # Load the configuration
-    with open(file=args.config, mode='r') as f:
-        config: Dict[str, Any] = yaml.safe_load(f)
 
-    # Run the main function with the configuration
-    main(config)
+    if args.config is not None:
+        config_path = _resolve_config_path(args.config)
+        config = _load_config(config_path)
+        checkpoint_dir = f'.checkpoints_{config_path.stem}'
+        main(config=config, checkpoint_path=checkpoint_dir)
+    else:
+        config_dir = _resolve_config_path(args.config_dir)
+        yaml_files = _iter_yaml_files(config_dir)
+        if not yaml_files:
+            raise FileNotFoundError(f'No YAML files found in {config_dir}')
+
+        print(f'Found {len(yaml_files)} config(s) in {config_dir}')
+        for idx, config_path in enumerate(yaml_files, start=1):
+            print(f'[{idx}/{len(yaml_files)}] Training with {config_path.name}')
+            _cleanup_tensors()
+            config = _load_config(config_path)
+            config.setdefault('dataset', {})
+            config['dataset']['write_to_disk'] = True
+            checkpoint_dir = f'.checkpoints_{config_path.stem}'
+            main(config=config, checkpoint_path=checkpoint_dir)

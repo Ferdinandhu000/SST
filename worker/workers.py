@@ -49,7 +49,7 @@ class Worker:
     def _validate_embedding_generator(self, embedding_generator: Voronoi | SoftVoronoi | Mask | Vector) -> None:
         if isinstance(self.net, FLRONetMLP):
             assert isinstance(embedding_generator, Vector)
-        if isinstance(self.net, (FLRONetUNet, FLRONetFNO, FNO3D, FLRONetTransolver, FNO, AFNO, Transolver)):
+        if isinstance(self.net, (FLRONetUNet, FLRONetFNO, FLRONetAFNO, FNO3D, FLRONetTransolver, FNO, AFNO, Transolver)):
             assert isinstance(embedding_generator, (Voronoi, SoftVoronoi, Mask))
 
 
@@ -57,14 +57,14 @@ class Trainer(Worker):
 
     def __init__(
         self, 
-        net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FNO3D | FLRONetTransolver | FNO | AFNO | Transolver,
+        net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FLRONetAFNO | FNO3D | FLRONetTransolver | FNO | AFNO | Transolver,
         lr: float,
         train_dataset: CFDDataset,
         val_dataset: CFDDataset,
         train_batch_size: int,
         val_batch_size: int,
     ):
-        self.net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FNO3D | FLRONetTransolver | FNO | AFNO | Transolver = net
+        self.net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FLRONetAFNO | FNO3D | FLRONetTransolver | FNO | AFNO | Transolver = net
         self.lr: float = lr
         self.train_dataset: CFDDataset = train_dataset
         self.val_dataset: CFDDataset = val_dataset
@@ -115,7 +115,7 @@ class Trainer(Worker):
         logger = Logger()
         checkpoint_saver = CheckpointSaver(model=self.net, dirpath=checkpoint_path)
         
-        if isinstance(self.net, (FLRONetFNO, FLRONetUNet, FLRONetMLP, FLRONetTransolver, FNO, AFNO, Transolver)):
+        if isinstance(self.net, (FLRONetFNO, FLRONetUNet, FLRONetMLP, FLRONetAFNO, FLRONetTransolver, FNO, AFNO, Transolver)):
             self.model_name = self.net.__class__.__name__.lower()
         else:
             self.model_name = 'fno3d'
@@ -136,7 +136,7 @@ class Trainer(Worker):
                 self._validate_inputs(sensor_timeframes, sensor_frames, fullstate_timeframes, fullstate_frames)
                 self.optimizer.zero_grad()
                 
-                if isinstance(self.net, (FLRONetFNO, FLRONetMLP, FLRONetUNet, FLRONetTransolver, FNO, AFNO, Transolver)):
+                if isinstance(self.net, (FLRONetFNO, FLRONetMLP, FLRONetUNet, FLRONetAFNO, FLRONetTransolver, FNO, AFNO, Transolver)):
                     reconstruction_frames: torch.Tensor = self.net(
                         sensor_timeframes=sensor_timeframes,
                         sensor_values=sensor_frames,
@@ -191,7 +191,7 @@ class Trainer(Worker):
                 fullstate_timeframes = fullstate_timeframes.to(device); fullstate_frames = fullstate_frames.to(device)
 
                 self._validate_inputs(sensor_timeframes, sensor_frames, fullstate_timeframes, fullstate_frames)
-                if isinstance(self.net, (FLRONetFNO, FLRONetMLP, FLRONetUNet, FLRONetTransolver, FNO, AFNO, Transolver)):
+                if isinstance(self.net, (FLRONetFNO, FLRONetMLP, FLRONetUNet, FLRONetAFNO, FLRONetTransolver, FNO, AFNO, Transolver)):
                     reconstruction_frames: torch.Tensor = self.net(
                         sensor_timeframes=sensor_timeframes,
                         sensor_values=sensor_frames,
@@ -209,12 +209,12 @@ class Trainer(Worker):
 
 class Predictor(Worker, DatasetMixin):
 
-    def __init__(self, net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FNO3D | FLRONetTransolver | FNO | AFNO | Transolver):
-        self.net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FNO3D | FLRONetTransolver | FNO | AFNO | Transolver = net.cuda()
+    def __init__(self, net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FLRONetAFNO | FNO3D | FLRONetTransolver | FNO | AFNO | Transolver):
+        self.net: FLRONetFNO | FLRONetUNet | FLRONetMLP | FLRONetAFNO | FNO3D | FLRONetTransolver | FNO | AFNO | Transolver = net.cuda()
         self.rmse = nn.MSELoss(reduction='sum')
         self.mae = nn.L1Loss(reduction='sum')
         
-        if isinstance(self.net, (FLRONetFNO, FLRONetUNet, FLRONetMLP, FLRONetTransolver, FNO, AFNO, Transolver)):
+        if isinstance(self.net, (FLRONetFNO, FLRONetUNet, FLRONetMLP, FLRONetAFNO, FLRONetTransolver, FNO, AFNO, Transolver)):
             self.model_name = self.net.__class__.__name__.lower()
         else:
             self.model_name = 'fno3d'

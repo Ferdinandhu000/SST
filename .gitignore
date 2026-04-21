@@ -5,9 +5,11 @@ tensors/
 .vscode/
 .logs/
 others/
+yaml_done/
+report/
 
 *.pt
 __pycache__/
 *.npy
 *.mat
-*.md
+voro_patch_solution.md

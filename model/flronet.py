@@ -1,3 +1,4 @@
+import math
 from typing import List, Tuple, Optional
 
 import torch
@@ -522,10 +523,12 @@ class SinusoidEmbedding(nn.Module):
 
 class TrunkNet(nn.Module):
 
-    def __init__(self, embedding_dim: int, n_outputs: int):
+    def __init__(self, embedding_dim: int, n_outputs: int, is_cross_attn: bool = False):
         super().__init__()
         self.embedding_dim: int = embedding_dim
         self.n_outputs: int = n_outputs
+        self.is_cross_attn: bool = is_cross_attn
+
         self.mlps = nn.ModuleList(
             modules=[
                 nn.Sequential(
@@ -539,6 +542,28 @@ class TrunkNet(nn.Module):
             ]
         )
 
+        self.query_mlps = nn.ModuleList(
+            modules=[
+                nn.Sequential(
+                    nn.Linear(embedding_dim, embedding_dim),
+                    nn.ReLU(),
+                    nn.Linear(embedding_dim, embedding_dim),
+                )
+                for _ in range(n_outputs)
+            ]
+        )
+        self.key_mlps = nn.ModuleList(
+            modules=[
+                nn.Sequential(
+                    nn.Linear(embedding_dim, embedding_dim),
+                    nn.ReLU(),
+                    nn.Linear(embedding_dim, embedding_dim),
+                )
+                for _ in range(n_outputs)
+            ]
+        )
+        self.scale = 1.0 / math.sqrt(embedding_dim)
+
     def forward(self, fullstate_time_embeddings: torch.Tensor, sensor_time_embeddings: torch.Tensor) -> List[torch.Tensor]:
         assert fullstate_time_embeddings.ndim == sensor_time_embeddings.ndim == 3
         assert fullstate_time_embeddings.shape[0] == sensor_time_embeddings.shape[0]
@@ -549,8 +574,14 @@ class TrunkNet(nn.Module):
 
         outputs: List[torch.Tensor] = []
         for i in range(self.n_outputs):
-            mlp: nn.Module = self.mlps[i]
-            output: torch.Tensor = torch.einsum('nse,nfe->nsf', mlp(sensor_time_embeddings), mlp(fullstate_time_embeddings))
+            if self.is_cross_attn:
+                query = self.query_mlps[i](fullstate_time_embeddings)
+                key = self.key_mlps[i](sensor_time_embeddings)
+                output = torch.einsum('nfe,nse->nsf', query, key) * self.scale
+                output = F.softmax(output, dim=1)
+            else:
+                mlp: nn.Module = self.mlps[i]
+                output = torch.einsum('nse,nfe->nsf', mlp(sensor_time_embeddings), mlp(fullstate_time_embeddings))
             assert output.shape == (batch_size, n_sensor_timeframes, n_fullstate_timeframes)
             outputs.append(output)
         return outputs
@@ -565,6 +596,7 @@ class _BaseFLRONet(nn.Module):
         n_stacked_networks: int,
         blur_kernel_size: int = 0,
         blur_sigma: float = 2.0,
+        is_cross_attn: bool = False,
     ):
         """
         Parameters
@@ -581,9 +613,14 @@ class _BaseFLRONet(nn.Module):
         self.n_channels: int = n_channels
         self.embedding_dim: int = embedding_dim
         self.n_stacked_networks: int = n_stacked_networks
+        self.is_cross_attn: bool = is_cross_attn
         # Trunk net
         self.sinusoid_embedding = SinusoidEmbedding(embedding_dim=embedding_dim)
-        self.trunk_net = TrunkNet(embedding_dim=embedding_dim, n_outputs=n_stacked_networks)
+        self.trunk_net = TrunkNet(
+            embedding_dim=embedding_dim,
+            n_outputs=n_stacked_networks,
+            is_cross_attn=is_cross_attn,
+        )
         self.bias = nn.Parameter(data=torch.randn(n_channels, 1, 1))
         # Optional input-smoothing blur (configurable via YAML)
         self.blur_kernel_size: int = blur_kernel_size
@@ -669,9 +706,8 @@ class _BaseFLRONet(nn.Module):
                 param.requires_grad = False
 
     def freeze_trunknets(self):
-        for trunk_net in self.trunk_nets:
-            for param in trunk_net.parameters():
-                param.requires_grad = False
+        for param in self.trunk_net.parameters():
+            param.requires_grad = False
 
     def freeze_bias(self):
         self.bias.requires_grad = False
@@ -683,12 +719,13 @@ class FLRONetFNO(_BaseFLRONet):
         self,
         n_channels: int, n_fno_layers: int, n_hmodes: int, n_wmodes: int,
         embedding_dim: int, n_stacked_networks: int, resolution: Tuple[int, int] = (180, 360),
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True, is_cross_attn: bool = False,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
             n_stacked_networks=n_stacked_networks,
             blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+            is_cross_attn=is_cross_attn,
         )
         self.n_fno_layers: int = n_fno_layers
         self.n_hmodes: int = n_hmodes
@@ -713,12 +750,13 @@ class FLRONetAFNO(_BaseFLRONet):
         self,
         n_channels: int, n_fno_layers: int, embedding_dim: int, n_stacked_networks: int, 
         resolution: Tuple[int, int] = (180, 360),
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True, is_cross_attn: bool = False,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
             n_stacked_networks=n_stacked_networks,
             blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+            is_cross_attn=is_cross_attn,
         )
         self.n_fno_layers: int = n_fno_layers
         self.resolution = resolution
@@ -740,12 +778,13 @@ class FLRONetMLP(_BaseFLRONet):
     def __init__(
         self,
         n_channels: int, embedding_dim: int, n_sensors: int, resolution: int, n_stacked_networks: int,
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True, is_cross_attn: bool = False,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
             n_stacked_networks=n_stacked_networks,
             blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+            is_cross_attn=is_cross_attn,
         )
         self.n_sensors: int = n_sensors
         self.resolution: int = resolution
@@ -764,12 +803,13 @@ class FLRONetUNet(_BaseFLRONet):
     def __init__(
         self,
         n_channels: int, embedding_dim: int, n_stacked_networks: int,
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True, is_cross_attn: bool = False,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
             n_stacked_networks=n_stacked_networks,
             blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+            is_cross_attn=is_cross_attn,
         )
         self.is_TC = is_TC
 
@@ -788,12 +828,13 @@ class FLRONetTransolver(_BaseFLRONet):
         n_channels: int, n_layers: int, n_hidden: int, n_head: int,
         embedding_dim: int, n_stacked_networks: int, resolution: Tuple[int, int] = (180, 360), n_timeframes: int = 5,
         slice_num: int = 32, dropout: float = 0.0,
-        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True,
+        blur_kernel_size: int = 0, blur_sigma: float = 2.0, is_TC: bool = True, is_cross_attn: bool = False,
     ):
         super().__init__(
             n_channels=n_channels, embedding_dim=embedding_dim,
             n_stacked_networks=n_stacked_networks,
             blur_kernel_size=blur_kernel_size, blur_sigma=blur_sigma,
+            is_cross_attn=is_cross_attn,
         )
         self.n_layers = n_layers
         self.n_hidden = n_hidden

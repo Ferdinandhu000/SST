@@ -56,8 +56,8 @@ def _load_sst_data(split: str) -> Tuple[np.ndarray, np.ndarray]:
     else:
         sst_3d = sst_3d[TRAIN_END:]
 
-    # Replace NaN (land) with 0.0 for tensor operations
-    sst_3d = np.nan_to_num(sst_3d, nan=0.0)
+    # Replace NaN (land) with 0.0 in-place to avoid an extra large memory copy.
+    np.nan_to_num(sst_3d, nan=0.0, copy=False)
 
     return sst_3d, nan_mask
 
