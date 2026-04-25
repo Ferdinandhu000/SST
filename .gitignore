@@ -5,7 +5,8 @@ tensors/
 .vscode/
 .logs/
 others/
-yaml_done/
+yaml/
+yaml_test/
 report/
 
 *.pt

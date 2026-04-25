@@ -19,7 +19,7 @@ from common.training import CheckpointLoader
 from worker import Trainer
 
 
-def main(config: Dict[str, Any], checkpoint_path: str = '.checkpoints') -> None:
+def main(config: Dict[str, Any], checkpoint_path: str = '.checkpoints', logfile: Optional[str] = None) -> None:
     """
     Main function to train FLRONet.
 
@@ -272,6 +272,7 @@ def main(config: Dict[str, Any], checkpoint_path: str = '.checkpoints') -> None:
         patience=patience,
         tolerance=tolerance, 
         checkpoint_path=checkpoint_path,
+        logfile=logfile,
         save_frequency=save_frequency,
     )
 
@@ -314,7 +315,8 @@ if __name__ == "__main__":
         config_path = _resolve_config_path(args.config)
         config = _load_config(config_path)
         checkpoint_dir = f'.checkpoints_{config_path.stem}'
-        main(config=config, checkpoint_path=checkpoint_dir)
+        logfile = str(Path('.logs') / config_path.stem)
+        main(config=config, checkpoint_path=checkpoint_dir, logfile=logfile)
     else:
         config_dir = _resolve_config_path(args.config_dir)
         yaml_files = _iter_yaml_files(config_dir)
@@ -329,4 +331,5 @@ if __name__ == "__main__":
             config.setdefault('dataset', {})
             config['dataset']['write_to_disk'] = True
             checkpoint_dir = f'.checkpoints_{config_path.stem}'
-            main(config=config, checkpoint_path=checkpoint_dir)
+            logfile = str(Path('.logs') / config_path.stem)
+            main(config=config, checkpoint_path=checkpoint_dir, logfile=logfile)

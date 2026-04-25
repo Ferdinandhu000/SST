@@ -106,13 +106,14 @@ class Trainer(Worker):
         patience: int,
         tolerance: float,
         checkpoint_path: Optional[str] = None,
+        logfile: Optional[str] = None,
         save_frequency: int = 5,
     ) -> None:
         
         train_metrics = Accumulator()
         early_stopping = EarlyStopping(patience, tolerance)
         timer = Timer()
-        logger = Logger()
+        logger = Logger(logfile=logfile) if logfile is not None else Logger()
         checkpoint_saver = CheckpointSaver(model=self.net, dirpath=checkpoint_path)
         
         if isinstance(self.net, (FLRONetFNO, FLRONetUNet, FLRONetMLP, FLRONetAFNO, FLRONetTransolver, FNO, AFNO, Transolver)):
@@ -301,7 +302,7 @@ class Predictor(Worker, DatasetMixin):
                 filename=f'{self.model_name}_{case_name.lower()}_w{int(t)}_d{n_dropout_sensors}_n{int(noise_level*100)}_{in_resolution[0]}x{in_resolution[1]}',
             )
 
-    def predict_from_dataset(self, dataset: CFDDataset) -> Tuple[float, float, float]:
+    def predict_from_dataset(self, dataset: CFDDataset, is_generate_plots: bool = False) -> Tuple[float, float, float]:
         self.net.eval()
         dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
         device = next(self.net.parameters()).device
@@ -360,20 +361,21 @@ class Predictor(Worker, DatasetMixin):
                         frame_mean_L2 = frame_mean_rmse / (torch.norm(fullstate_frame).item() / (fullstate_frame.numel()**0.5))
 
                     at_timeframe = time_val
-                    plot_frame(
-                        sensor_positions=dataset.sensor_positions,
-                        sensor_frame=sensor_frame,
-                        fullstate_frame=fullstate_frame, 
-                        reconstruction_frame=reconstruction_frame,
-                        mask=mask,
-                        reduction=lambda x: x[0],
-                        title=(
-                            f'week={at_timeframe}, '
-                            f'active sensors: {str(n_active_sensors).zfill(2)}/{str(n_sensors).zfill(2)}, '
-                            f'RMSE: {frame_mean_rmse:.3f}, MAE: {frame_mean_mae:.3f}, L2Loss: {frame_mean_L2:.3f}'
-                        ),
-                        filename=f'{self.model_name}_{case_names[0].lower()}s{sampling_ids[0]}_w{str(at_timeframe).zfill(4)}_d{n_dropout_sensors}_n{int(dataset.noise_level*100)}_{trained_H}x{trained_W}'
-                    )
+                    if is_generate_plots:
+                        plot_frame(
+                            sensor_positions=dataset.sensor_positions,
+                            sensor_frame=sensor_frame,
+                            fullstate_frame=fullstate_frame, 
+                            reconstruction_frame=reconstruction_frame,
+                            mask=mask,
+                            reduction=lambda x: x[0],
+                            title=(
+                                f'week={at_timeframe}, '
+                                f'active sensors: {str(n_active_sensors).zfill(2)}/{str(n_sensors).zfill(2)}, '
+                                f'RMSE: {frame_mean_rmse:.3f}, MAE: {frame_mean_mae:.3f}, L2Loss: {frame_mean_L2:.3f}'
+                            ),
+                            filename=f'{self.model_name}_{case_names[0].lower()}s{sampling_ids[0]}_w{str(at_timeframe).zfill(4)}_d{n_dropout_sensors}_n{int(dataset.noise_level*100)}_{trained_H}x{trained_W}'
+                        )
                     rmse_values.append(frame_mean_rmse)
                     mae_values.append(frame_mean_mae)
                     L2Loss_values.append(frame_mean_L2)

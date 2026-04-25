@@ -18,6 +18,9 @@ def plot_frame(
     title: str = '',
     filename: str = '',
     extent = [0, 360, -90, 90], 
+    origin: str = 'upper',
+    loss_vmin: float = 0.0,
+    loss_vmax: float = 10.0,
     dpi: int = 600,
 ) -> None:
     
@@ -48,8 +51,10 @@ def plot_frame(
         frames_to_plot.append(process_frame(fullstate_frame))
         chart_titles.append("Full State") 
     if reconstruction_frame is not None and fullstate_frame is not None:
-        err = (reduction(reconstruction_frame) if reduction else reconstruction_frame).detach().cpu().numpy().squeeze() - \
-              (reduction(fullstate_frame) if reduction else fullstate_frame).detach().cpu().numpy().squeeze()
+        err = np.abs(
+            (reduction(reconstruction_frame) if reduction else reconstruction_frame).detach().cpu().numpy().squeeze() -
+            (reduction(fullstate_frame) if reduction else fullstate_frame).detach().cpu().numpy().squeeze()
+        )
         if mask_np is not None:
             err = np.ma.masked_where(mask_np > 0.5, err)
         frames_to_plot.append(err)
@@ -58,7 +63,12 @@ def plot_frame(
     num_plots = len(frames_to_plot)
     if num_plots == 0: return
 
-    aspect_ratio = frames_to_plot[0].shape[0] / frames_to_plot[0].shape[1]
+    if extent is not None:
+        x_span = float(extent[1] - extent[0])
+        y_span = float(extent[3] - extent[2])
+        aspect_ratio = y_span / x_span if x_span != 0 else (frames_to_plot[0].shape[0] / frames_to_plot[0].shape[1])
+    else:
+        aspect_ratio = frames_to_plot[0].shape[0] / frames_to_plot[0].shape[1]
     figwidth = 10.0
     fig, axs = plt.subplots(num_plots, 1, figsize=(figwidth, figwidth * aspect_ratio * num_plots)) 
     if num_plots == 1: axs = [axs]
@@ -70,28 +80,44 @@ def plot_frame(
     for frame, ax, chart_title in zip(frames_to_plot, axs, chart_titles):
         
         if chart_title == 'Error':
-            # Symmetric error bounds around 0
-            max_err = np.nanmax(np.abs(frame))
-            bound = 5.0 if np.isnan(max_err) or max_err == 0 else max_err
-            norm = matplotlib.colors.Normalize(vmin=-bound, vmax=bound)
+            norm = matplotlib.colors.Normalize(vmin=loss_vmin, vmax=loss_vmax)
         else:
             # SST natural range limits
             norm = matplotlib.colors.Normalize(vmin=-2, vmax=35)
 
-        # Draw conventionally matching array geometry. No explicit extent/origin transformations to 
-        # keep what the model sees identical to what is plotted visually!
-        im = ax.imshow(frame, cmap=cmap, norm=norm, aspect='auto', interpolation='bicubic')
+        im = ax.imshow(
+            frame,
+            cmap=cmap,
+            norm=norm,
+            aspect='auto',
+            extent=extent,
+            origin=origin,
+            interpolation='nearest',
+        )
         
         cbar = ax.figure.colorbar(im, ax=ax, orientation='vertical', fraction=0.046, pad=0.02)
         cbar.ax.tick_params(labelsize=10)
 
         if sensor_positions is not None and chart_title != 'Error':
             H, W = frame.shape
+            if extent is not None:
+                x_min, x_max, y_min, y_max = extent
+                x_scale = (x_max - x_min) / W
+                y_scale = (y_max - y_min) / H
             for sp_row, sp_col in sensor_positions.numpy():
+                if extent is not None:
+                    plot_x = x_min + (sp_col + 0.5) * x_scale
+                    if origin == 'upper':
+                        plot_y = y_max - (sp_row + 0.5) * y_scale
+                    else:
+                        plot_y = y_min + (sp_row + 0.5) * y_scale
+                else:
+                    plot_x = sp_col
+                    plot_y = sp_row
                 # Direct plotting on array coordinate pixel space
                 ax.add_patch(
                     patches.Circle(
-                        xy=(sp_col, sp_row),
+                        xy=(plot_x, plot_y),
                         radius=2.0,
                         edgecolor='black',
                         facecolor='white',

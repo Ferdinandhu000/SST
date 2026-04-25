@@ -125,6 +125,7 @@ class CFDDataset(Dataset, DatasetMixin):
         init_fullstate_timeframes: List[int] | None,
         seed: int,
         write_to_disk: bool = True,
+        sensor_position_path: str | None = None,
     ) -> None:
         
         super().__init__()
@@ -142,6 +143,7 @@ class CFDDataset(Dataset, DatasetMixin):
         self.seed: int = seed
         self.is_random_fullstate_frames: bool = init_fullstate_timeframes is None
         self.write_to_disk: bool = write_to_disk
+        self.sensor_position_path: str | None = sensor_position_path
 
         self.H, self.W = resolution
         self.n_sensor_timeframes_per_chunk: int = len(init_sensor_timeframes)
@@ -182,7 +184,26 @@ class CFDDataset(Dataset, DatasetMixin):
         
         # Pass mask to sensor generator so sensors are placed only on ocean
         self.sensor_generator.mask = self.mask
-        self.sensor_positions = self.sensor_generator()
+        if self.sensor_position_path:
+            if not os.path.exists(self.sensor_position_path):
+                raise FileNotFoundError(f'Sensor position file not found: {self.sensor_position_path}')
+            loaded_sensor_positions = torch.load(self.sensor_position_path, weights_only=True, map_location='cpu')
+            if not isinstance(loaded_sensor_positions, torch.Tensor):
+                raise TypeError(f'Expected a tensor in {self.sensor_position_path}, but got {type(loaded_sensor_positions)}')
+            loaded_sensor_positions = loaded_sensor_positions.int()
+            if loaded_sensor_positions.ndim != 2 or loaded_sensor_positions.shape[1] != 2:
+                raise ValueError(
+                    f'Expected sensor positions with shape [N, 2], but got {tuple(loaded_sensor_positions.shape)} '
+                    f'from {self.sensor_position_path}'
+                )
+            if loaded_sensor_positions.shape[0] != self.n_sensors:
+                raise ValueError(
+                    f'Configured n_sensors={self.n_sensors}, but loaded {loaded_sensor_positions.shape[0]} '
+                    f'positions from {self.sensor_position_path}'
+                )
+            self.sensor_positions = loaded_sensor_positions
+        else:
+            self.sensor_positions = self.sensor_generator()
 
         # 2. Initialize Embedding Generator
         if embedding_generator == 'Mask':

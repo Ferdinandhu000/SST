@@ -33,16 +33,25 @@ def main(config: Dict[str, Any]) -> None:
     sensor_generator: str                       = str(config['dataset']['sensor_generator'])
     embedding_generator: str                    = str(config['dataset']['embedding_generator'])
 
-    # Evaluate-specific: Force completely random sensor selection every time it's run
-    import random
-    seed: int                                   = random.randint(0, 1000000)
-    print(f"\n[*] evaluate.py: Forcing random seed {seed} to randomly select Test sensors.")
-    # Force regenerating the test tensors on disk so it uses the new random sensors
+    is_load_sensor_pos: bool                    = bool(config['evaluate'].get('is_load_sensor_pos', True))
+    sensor_position_path: str                   = str(config['evaluate'].get('sensor_position_path', 'sensor_position_pt/pos.pt'))
+
+    # Evaluate-specific: default behavior is to reuse fixed sensor positions from pos.pt
+    if is_load_sensor_pos:
+        seed: int = int(config['dataset'].get('seed', 0))
+        print(f"\n[*] evaluate.py: Using fixed sensor positions from {sensor_position_path}.")
+    else:
+        import random
+        seed = random.randint(0, 1000000)
+        print(f"\n[*] evaluate.py: Forcing random seed {seed} to randomly select Test sensors.")
+
+    # Always regenerate test tensors during evaluate to keep behavior explicit and isolated.
     write_to_disk: bool                         = True 
     
     n_dropout_sensors: int                      = int(config['evaluate']['n_dropout_sensors'])
     noise_level: float                          = float(config['evaluate']['noise_level'])
     init_fullstate_timeframes: List[int] | None  = config['evaluate']['init_fullstate_timeframes']
+    is_generate_plots: bool                     = bool(config['evaluate'].get('is_generate_plots', False))
     from_checkpoint: str                        = str(config['evaluate']['from_checkpoint'])
 
     # Load the model
@@ -75,12 +84,16 @@ def main(config: Dict[str, Any]) -> None:
         init_fullstate_timeframes=init_fullstate_timeframes,
         seed=seed,
         write_to_disk=write_to_disk,
+        sensor_position_path=sensor_position_path if is_load_sensor_pos else None,
     )
     
     # Make prediction
     print(f'Using: {from_checkpoint}')
     predictor = Predictor(net=net)
-    avg_metrics: Tuple[float, float] = predictor.predict_from_dataset(dataset)
+    avg_metrics: Tuple[float, float, float] = predictor.predict_from_dataset(
+        dataset,
+        is_generate_plots=is_generate_plots,
+    )
     print(avg_metrics)
 
 
