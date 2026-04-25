@@ -13,10 +13,13 @@ Logic
 -----
 For each checkpoint directory, sort all *.pt files by the trailing epoch
 number in their name (e.g. "flronetfno36.pt" → epoch 36).
-Then copy the 10th-from-last file (index -10 in the sorted list) to:
+Then copy the 11th-from-last file (index -11 in the sorted list) to:
     checkpoints_best/<checkpoint_dir_name>/<filename>
 
-If fewer than 10 checkpoints exist the earliest available file is copied
+With patience=10 this is the epoch just before the patience counter started
+(e.g. last epoch=18 → chosen epoch=8).
+
+If fewer than 11 checkpoints exist the earliest available file is copied
 and a warning is printed.
 """
 
@@ -52,12 +55,12 @@ def pick_best(checkpoint_dirs: list[str]) -> None:
             print(f"[SKIP]  '{dir_name}' contains no .pt files")
             continue
 
-        if len(pts) < 10:
+        if len(pts) < 11:
             print(f"[WARN]  '{dir_name}' has only {len(pts)} checkpoint(s); "
-                  f"picking the earliest one instead of 10th-from-last.")
+                  f"picking the earliest one instead of 11th-from-last.")
             chosen = pts[0]
         else:
-            chosen = pts[-10]
+            chosen = pts[-11]
 
         dest_dir = BEST_DIR / dir_name
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -68,13 +71,13 @@ def pick_best(checkpoint_dirs: list[str]) -> None:
         chosen_epoch = _epoch_from_name(chosen.name)
         print(
             f"[OK]    '{dir_name}' | last epoch={last_epoch}, "
-            f"10th-from-last epoch={chosen_epoch} → {dest.relative_to(ROOT_DIR)}"
+            f"11th-from-last epoch={chosen_epoch} → {dest.relative_to(ROOT_DIR)}"
         )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Copy the 10th-from-last checkpoint from each specified directory."
+        description="Copy the 11th-from-last checkpoint from each specified directory."
     )
     parser.add_argument(
         "dirs",
